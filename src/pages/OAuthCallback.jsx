@@ -19,29 +19,33 @@ const OAuthCallback = () => {
         }
 
         if (code) {
-            setStatus('Menukar kode dengan access token...');
-            // IMPLEMENTASI ASLI:
-            // Di sini Anda biasanya akan mengirim `code` ke backend Anda (Node.js/Supabase Edge Function)
-            // Backend tersebut akan POST ke https://api.instagram.com/oauth/access_token
-            // Menggunakan client_id, client_secret, grant_type=authorization_code, redirect_uri, code.
-            // API akan mengembalikan `access_token` dan `user_id`.
+            setStatus('Membaca token dari server...');
 
-            // Untuk tujuan Frontend Only (Simulasi):
-            setTimeout(() => {
-                setStatus('Mengambil profil Instagram...');
-
-                // Simulasikan hasil pengambilan profil dari graph.instagram.com/me
-                const simulatedUser = {
-                    username: `ig_user_${Math.floor(Math.random() * 1000)}`,
-                    profilePic: `https://i.pravatar.cc/150?u=${code}` // Generate random pic based on code
-                };
-
-                // Simpan di local storage
-                localStorage.setItem('ig_user', JSON.stringify(simulatedUser));
-
-                setStatus('Berhasil! Mengarahkan ke Quest...');
-                setTimeout(() => navigate('/quest'), 1000);
-            }, 1500);
+            // Panggil Vercel API
+            fetch('/api/auth', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ code }),
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        setStatus(`Selamat datang, @${data.user.username}!`);
+                        localStorage.setItem('ig_user', JSON.stringify(data.user));
+                        setTimeout(() => navigate('/quest'), 1000);
+                    } else {
+                        console.error('Auth Error:', data);
+                        setStatus('Gagal Autentikasi. Mengalihkan...');
+                        setTimeout(() => navigate('/'), 3000);
+                    }
+                })
+                .catch(err => {
+                    console.error('Network Error:', err);
+                    setStatus('Error jaringan. Coba lagi nanti...');
+                    setTimeout(() => navigate('/'), 3000);
+                });
 
         } else {
             // Jika tidak ada kode, redirect ke home
