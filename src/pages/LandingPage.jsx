@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Instagram, Camera, Sparkles, ArrowRight, Users, Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { supabase } from '../supabase';
+import Footer from '../components/Footer';
 
 const LandingPage = () => {
     const navigate = useNavigate();
@@ -197,6 +198,7 @@ const LandingPage = () => {
                                     >
                                         Last <ChevronsRight className="w-4 h-4 ml-1" />
                                     </button>
+
                                 </div>
                             )}
                         </div>
@@ -271,7 +273,9 @@ const LandingPage = () => {
                 </form>
 
             </motion.div>
-        </div >
+
+            <Footer />
+        </div>
     );
 };
 

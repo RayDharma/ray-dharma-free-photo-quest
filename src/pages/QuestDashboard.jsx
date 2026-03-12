@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ChecklistItem } from '../components/ChecklistItem';
 import { verifyAllQuests } from '../services/instagramApi';
 import { supabase } from '../supabase';
+import Footer from '../components/Footer';
 import imageCompression from 'browser-image-compression';
 import { Trophy, Loader2, Link2, Users, ChevronLeft, ChevronRight } from 'lucide-react';
 
@@ -396,6 +397,8 @@ const QuestDashboard = () => {
                 </motion.div>
 
             </div>
+
+            <Footer />
         </div>
     );
 };

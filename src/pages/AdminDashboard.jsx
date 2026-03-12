@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabase';
+import Footer from '../components/Footer';
 import { Users, Loader2, Check, X, Image as ImageIcon, LockKeyhole, Trash2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -364,6 +365,8 @@ const AdminDashboard = () => {
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            <Footer />
         </div>
     );
 };
