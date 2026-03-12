@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ChecklistItem } from '../components/ChecklistItem';
 import { verifyAllQuests } from '../services/instagramApi';
 import { supabase } from '../supabase';
-import { Trophy, Loader2, Link2, Users } from 'lucide-react';
+import imageCompression from 'browser-image-compression';
+import { Trophy, Loader2, Link2, Users, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const QuestDashboard = () => {
     const navigate = useNavigate();
@@ -16,34 +17,35 @@ const QuestDashboard = () => {
     const [quests, setQuests] = useState({
         isFollowing: false,
         hasLiked: false,
-        hasCommented: false
+        hasCommented: false,
+        hasReposted: false,
+        hasShared: false
     });
     const [isVerifying, setIsVerifying] = useState(false);
     const [isCompleted, setIsCompleted] = useState(false);
     const [savingStatus, setSavingStatus] = useState('');
+    const [errorMsg, setErrorMsg] = useState('');
+    const [selectedFile, setSelectedFile] = useState(null);
 
     // Leaderboard State
     const [leaderboard, setLeaderboard] = useState([]);
     const [loadingLeaderboard, setLoadingLeaderboard] = useState(true);
+    const [page, setPage] = useState(0);
 
     useEffect(() => {
-        // 1. Cek User Profile dari Local Storage (Disimpan oleh OAuthCallback)
         const storedUser = localStorage.getItem('ig_user');
         if (storedUser) {
             setUser(JSON.parse(storedUser));
         } else {
-            // Jika tidak ada user, redirect ke halaman utama
             navigate('/');
             return;
         }
 
-        // 2. Fetch Leaderboard Publik dari Supabase
-        fetchLeaderboard();
-
         const subscription = supabase
             .channel('public:quest_completers')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'quest_completers' }, payload => {
-                fetchLeaderboard(); // Refresh saat ada user baru
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'quest_completers' }, payload => {
+                setPage(0);
+                fetchLeaderboard(0);
             })
             .subscribe();
 
@@ -52,14 +54,22 @@ const QuestDashboard = () => {
         };
     }, [navigate]);
 
-    const fetchLeaderboard = async () => {
+    useEffect(() => {
+        fetchLeaderboard(page);
+    }, [page]);
+
+    const fetchLeaderboard = async (currentPage = page) => {
         try {
             setLoadingLeaderboard(true);
+            const from = currentPage * 10;
+            const to = from + 9;
+
             const { data, error } = await supabase
                 .from('quest_completers')
-                .select('username, completed_at')
+                .select('username, completed_at, status')
+                .eq('status', 'Approved')
                 .order('completed_at', { ascending: false })
-                .limit(10); // Ambil 10 terbaru agar UI rapi
+                .range(from, to);
 
             if (!error && data) {
                 setLeaderboard(data);
@@ -71,56 +81,91 @@ const QuestDashboard = () => {
         }
     };
 
-    const handleVerifyClick = async () => {
+    const handleFileChange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        if (!file.type.startsWith('image/')) {
+            alert('Harap unggah file berupa gambar (JPG, PNG, dll).');
+            return;
+        }
+
         setIsVerifying(true);
-        setSavingStatus('');
+        setSavingStatus('Sedang mengkompresi gambar...');
 
-        // Dalam implementasi asli yang utuh, lempar token dari OAuth flow ke fungsi ini
-        const mockAccessToken = 'MOCK_TOKEN_123';
-        const targetUserId = 'raydharmawan_id';
-        const targetMediaId = 'campaign_post_id';
+        try {
+            const options = {
+                maxSizeMB: 0.5, // Maksimal 500KB
+                maxWidthOrHeight: 1280, // Resolusi cukup HD tapi efisien
+                useWebWorker: true,
+            };
 
-        const result = await verifyAllQuests(mockAccessToken, targetUserId, targetMediaId);
-
-        if (result.success) {
-            setQuests(result.data);
+            const compressedFile = await imageCompression(file, options);
+            setSelectedFile(compressedFile);
+        } catch (error) {
+            console.error('Error compressing image:', error);
+            // Fallback ke file asli jika kompresi gagal
+            setSelectedFile(file);
+        } finally {
             setIsVerifying(false);
-
-            // Jika semua tugas selesai
-            if (result.data.isFollowing && result.data.hasLiked && result.data.hasCommented) {
-                setIsCompleted(true);
-                saveCompletion(user.username);
-            }
-        } else {
-            setIsVerifying(false);
+            setSavingStatus('');
         }
     };
 
-    const saveCompletion = async (username) => {
-        try {
-            setSavingStatus('Menyimpan nama Anda ke daftar...');
+    const handleSubmit = async () => {
+        if (!selectedFile) return;
 
-            const { data, error } = await supabase
+        setIsVerifying(true);
+        setErrorMsg('');
+        setSavingStatus('Sedang mengunggah bukti screenshot...');
+
+        try {
+            const fileExt = selectedFile.name.split('.').pop();
+            const fileName = `${user.username}-${Date.now()}.${fileExt}`;
+            const filePath = `${fileName}`;
+
+            const { error: uploadError } = await supabase.storage
+                .from('quest_proofs')
+                .upload(filePath, selectedFile);
+
+            if (uploadError) throw uploadError;
+
+            const { data: { publicUrl } } = supabase.storage
+                .from('quest_proofs')
+                .getPublicUrl(filePath);
+
+            setSavingStatus('Menyimpan data pendaftaran...');
+
+            const { error: dbError } = await supabase
                 .from('quest_completers')
                 .insert([
-                    { username, status: 'Quest Completed', completed_at: new Date().toISOString() },
+                    {
+                        username: user.username,
+                        status: 'Pending',
+                        proof_image_url: publicUrl,
+                        completed_at: new Date().toISOString()
+                    },
                 ]);
 
-            if (error) {
-                console.error("Supabase error:", error);
-
-                // Handle duplicate username constraint if you add one to Supabase
-                if (error.code === '23505') {
-                    setSavingStatus('Anda sudah pernah menyelesaikan Quest ini!');
-                } else {
-                    setSavingStatus('Gagal menyimpan. Coba lagi nanti.');
+            if (dbError) {
+                if (dbError.code === '23505') {
+                    throw new Error('Anda sudah pernah mengirimkan bukti Quest ini!');
                 }
-            } else {
-                setSavingStatus('Berhasil disimpan! Anda resmi terdaftar. 🎉');
+                throw dbError;
             }
+
+            setSavingStatus('Bukti berhasil dikirim! Silakan tunggu konfirmasi Admin.');
+            setIsCompleted(true);
+            setIsVerifying(false);
+
         } catch (err) {
-            console.error("Unknown error:", err);
-            setSavingStatus('Terjadi kesalahan koneksi saat menyimpan.');
+            console.error("Upload Error:", err);
+            if (err.message && err.message.includes('Bucket not found')) {
+                setErrorMsg('Sistem belum siap. (Pesan untuk Admin: Harap buat Storage Bucket "quest_proofs" di Supabase Dashboard Anda sekarang!)');
+            } else {
+                setErrorMsg(err.message || 'Terjadi kesalahan saat mengunggah bukti.');
+            }
+            setIsVerifying(false);
         }
     };
 
@@ -178,41 +223,93 @@ const QuestDashboard = () => {
                         <ChecklistItem
                             title="Follow @raydharmawan_"
                             description="Buka profil dan klik ikuti."
-                            href="https://www.instagram.com/raydharmawan_" // Tautan ke Profil
+                            href="https://www.instagram.com/raydharmawan_"
                             isCompleted={quests.isFollowing}
                             delay={0.1}
                         />
                         <ChecklistItem
                             title="Like Postingan"
-                            description="Berikan like pada postingan ini."
-                            href="https://www.instagram.com/p/TARGET_POST_ID/" // Tautan Spesifik Postingan
+                            description="Berikan like pada konten yang Anda sukai."
+                            href="https://www.instagram.com/raydharmawan_"
                             isCompleted={quests.hasLiked}
                             delay={0.2}
                         />
                         <ChecklistItem
                             title="Komentar Menarik"
-                            description="Tinggalkan jejakmu di postingan."
-                            href="https://www.instagram.com/p/TARGET_POST_ID/#comments" // Tautan ke Komentar Postingan
+                            description="Tinggalkan jejak kreatif di postingan."
+                            href="https://www.instagram.com/raydharmawan_"
                             isCompleted={quests.hasCommented}
                             delay={0.3}
                         />
-
-                        {isVerifying && (
-                            <div className="absolute inset-0 bg-background/60 backdrop-blur-md rounded-xl flex items-center justify-center flex-col z-10">
-                                <Loader2 className="w-10 h-10 text-primary animate-spin mb-4" />
-                                <p className="text-primary font-medium animate-pulse text-center px-4">Memverifikasi misi via Instagram API...<br /><span className="text-xs text-gray-400">(Estimasi 3 detik)</span></p>
-                            </div>
-                        )}
+                        <ChecklistItem
+                            title="Repost Postingan"
+                            description="Repost postingan ke feeds Anda."
+                            href="https://www.instagram.com/raydharmawan_"
+                            isCompleted={quests.hasReposted}
+                            delay={0.4}
+                        />
+                        <ChecklistItem
+                            title="Share ke Story"
+                            description="Bagikan postingan ke Story Instagram."
+                            href="https://www.instagram.com/raydharmawan_"
+                            isCompleted={quests.hasShared}
+                            delay={0.5}
+                        />
                     </div>
 
                     {!isCompleted && (
-                        <button
-                            onClick={handleVerifyClick}
-                            disabled={isVerifying}
-                            className="w-full mt-6 py-4 bg-white/5 hover:bg-primary/20 hover:text-primary transition-colors border border-white/10 rounded-xl font-bold text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
-                        >
-                            {isVerifying ? 'Sedang Memeriksa...' : 'Cek Status Misi Saya'}
-                        </button>
+                        <div className="mt-6 flex flex-col items-center gap-3">
+                            <input
+                                type="file"
+                                id="proof-upload"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={handleFileChange}
+                                disabled={isVerifying}
+                            />
+                            {!selectedFile ? (
+                                <label
+                                    htmlFor="proof-upload"
+                                    className={`w-full py-4 transition-all border border-white/10 rounded-xl font-bold flex justify-center items-center gap-2 cursor-pointer bg-primary/20 text-primary hover:bg-primary/40`}
+                                >
+                                    Pilih Gambar Screenshot
+                                </label>
+                            ) : (
+                                <div className="w-full flex flex-col gap-3">
+                                    <div className="flex justify-between items-center p-3 bg-white/5 rounded-xl border border-white/10">
+                                        <span className="text-sm text-gray-300 truncate w-32 md:w-48 text-left">📁 {selectedFile.name}</span>
+                                        <button
+                                            onClick={() => setSelectedFile(null)}
+                                            className="text-red-400 text-sm hover:underline"
+                                            disabled={isVerifying}
+                                        >
+                                            Ganti
+                                        </button>
+                                    </div>
+                                    <button
+                                        onClick={handleSubmit}
+                                        disabled={isVerifying}
+                                        className={`w-full py-4 transition-all rounded-xl font-bold flex justify-center items-center gap-2 
+                                            ${isVerifying ? 'bg-white/5 text-gray-400 opacity-50 cursor-not-allowed' : 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:opacity-90 shadow-lg'}
+                                        `}
+                                    >
+                                        {isVerifying ? (
+                                            <>Sedang Mengunggah... <Loader2 className="w-5 h-5 animate-spin" /></>
+                                        ) : (
+                                            'Kirim Bukti Sekarang'
+                                        )}
+                                    </button>
+                                </div>
+                            )}
+                            {errorMsg && (
+                                <p className="text-sm font-semibold text-red-500 mt-2 text-center bg-red-500/10 px-4 py-3 rounded-xl border border-red-500/20 w-full animate-in fade-in slide-in-from-bottom-2">
+                                    ⚠️ {errorMsg}
+                                </p>
+                            )}
+                            <p className="text-xs text-gray-500 text-center mt-2 px-2">
+                                Pastikan screenshot menampilkan bukti Anda sudah menyelesaikan kelima misi di atas.
+                            </p>
+                        </div>
                     )}
                 </motion.div>
 
@@ -262,19 +359,38 @@ const QuestDashboard = () => {
                                 Belum ada yang menyelesaikan quest. Jadilah yang pertama!
                             </div>
                         ) : (
-                            <ul className="divide-y divide-white/5">
-                                {leaderboard.map((com, index) => (
-                                    <li key={index} className="p-4 flex items-center justify-between hover:bg-white/5 rounded-lg transition-colors">
-                                        <div className="flex items-center gap-3">
-                                            <span className="text-gray-500 font-mono text-xs w-5 text-center">#{index + 1}</span>
-                                            <span className="font-semibold text-gray-200">@{com.username}</span>
-                                        </div>
-                                        <span className="text-xs text-emerald-400 border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 rounded-full">
-                                            Sukses
-                                        </span>
-                                    </li>
-                                ))}
-                            </ul>
+                            <>
+                                <ul className="divide-y divide-white/5">
+                                    {leaderboard.map((com, index) => (
+                                        <li key={index} className="p-4 flex items-center justify-between hover:bg-white/5 rounded-lg transition-colors">
+                                            <div className="flex items-center gap-3">
+                                                <span className="text-gray-500 font-mono text-xs w-8 text-center">#{page * 10 + index + 1}</span>
+                                                <span className="font-semibold text-gray-200">@{com.username}</span>
+                                            </div>
+                                            <span className="text-xs text-emerald-400 border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 rounded-full">
+                                                Sukses
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                                <div className="flex justify-between items-center px-4 py-3 border-t border-white/10 mt-2">
+                                    <button
+                                        onClick={() => setPage(Math.max(0, page - 1))}
+                                        disabled={page === 0 || loadingLeaderboard}
+                                        className="flex items-center gap-1 text-sm text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400 transition-colors"
+                                    >
+                                        <ChevronLeft className="w-4 h-4" /> Prev
+                                    </button>
+                                    <span className="text-xs text-gray-500 font-mono">Page {page + 1}</span>
+                                    <button
+                                        onClick={() => setPage(page + 1)}
+                                        disabled={leaderboard.length < 10 || loadingLeaderboard}
+                                        className="flex items-center gap-1 text-sm text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400 transition-colors"
+                                    >
+                                        Next <ChevronRight className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </>
                         )}
                     </div>
                 </motion.div>
